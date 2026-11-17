@@ -1,0 +1,38 @@
+[package]
+name = "music_list_editor"
+version = "0.1.0"
+description = "Windows 桌面端 .m3u 播放列表编辑器"
+authors = ["FangDWe"]
+edition = "2024"
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "music_list_editor_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 编码探测：UTF-8 / GB18030（需求文档 F1.3）
+encoding_rs = "0.8"
+# 删除播放列表走系统回收站（需求文档 F4.1）
+trash = "5"
+# 工作区 .m3u 变更监听（需求文档 F2.6）
+notify = "8"
+# 复制文件路径：系统剪贴板
+arboard = "3"
+
+# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
