@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type PointerEvent,
+} from 'react';
 import { AnimatePresence } from 'motion/react';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import type {
@@ -41,6 +49,43 @@ export function App() {
   const toastTimer = useRef<number | null>(null);
   const restoredRef = useRef(false);
   const appRef = useRef<AppState | null>(null);
+
+  // 侧栏宽度可拖拽：播放列表区与歌曲区宽度比例可调
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    const saved = Number(window.localStorage.getItem('mle.sidebarWidth'));
+    return Number.isFinite(saved) && saved >= 220 && saved <= 560 ? saved : 300;
+  });
+  const [resizing, setResizing] = useState(false);
+  const resizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const startResize = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      resizeRef.current = { startX: event.clientX, startWidth: sidebarWidth };
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setResizing(true);
+      document.body.classList.add('resizing');
+    },
+    [sidebarWidth],
+  );
+
+  const moveResize = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    const drag = resizeRef.current;
+    if (!drag) return;
+    const next = Math.min(560, Math.max(220, drag.startWidth + (event.clientX - drag.startX)));
+    setSidebarWidth(next);
+  }, []);
+
+  const endResize = useCallback(() => {
+    if (!resizeRef.current) return;
+    resizeRef.current = null;
+    setResizing(false);
+    document.body.classList.remove('resizing');
+    setSidebarWidth((value) => {
+      window.localStorage.setItem('mle.sidebarWidth', String(value));
+      return value;
+    });
+  }, []);
 
   const showToast = useCallback(
     (
@@ -665,6 +710,7 @@ export function App() {
         <Sidebar
           app={app}
           busy={busy}
+          width={sidebarWidth}
           onSelect={(kind, playlistId) => void selectView(kind, playlistId)}
           onOpenWorkspace={() => void openWorkspace()}
           onCloseWorkspace={() => void closeWorkspace()}
@@ -672,6 +718,15 @@ export function App() {
           onRenamePlaylist={(id, current) => setDialog({ kind: 'rename', playlistId: id, current })}
           onDeletePlaylist={(id, name) => setDialog({ kind: 'confirm-delete', playlistId: id, name })}
           onPromoteSingle={() => void promoteSingle()}
+        />
+
+        <div
+          className={`resizer${resizing ? ' active' : ''}`}
+          onPointerDown={startResize}
+          onPointerMove={moveResize}
+          onPointerUp={endResize}
+          onPointerCancel={endResize}
+          title="拖动调整播放列表区域宽度"
         />
 
         <main className="content">
