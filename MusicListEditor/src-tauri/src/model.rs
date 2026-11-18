@@ -86,6 +86,34 @@ pub struct Track {
     pub ref_names: Vec<String>,
 }
 
+/// 去掉 Windows verbatim 前缀（`\\?\`、`\\?\UNC\`），只做文本处理，不访问磁盘
+pub fn strip_verbatim(text: &str) -> String {
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        text.to_string()
+    }
+}
+
+/// 展示用路径：去 verbatim 前缀，保留原分隔符（`canonicalize` 会带出 `\\?\`，不应出现在界面上）
+pub fn display_path(path: &Path) -> String {
+    strip_verbatim(&path.to_string_lossy())
+}
+
+/// 标准格式路径：转为绝对路径 → 去 verbatim 前缀 → 分隔符统一为 `/`（F4.3 写回规则）
+pub fn standard_path(path: &Path) -> String {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|dir| dir.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+    display_path(&absolute).replace('\\', "/")
+}
+
 /// 规范化 id：绝对路径 → 去 \\?\ 前缀 → 统一反斜杠 → 小写（F1.4 / F2.5）
 pub fn norm_id(path: &Path) -> String {
     let absolute = if path.is_absolute() {
@@ -95,9 +123,9 @@ pub fn norm_id(path: &Path) -> String {
             .map(|dir| dir.join(path))
             .unwrap_or_else(|_| path.to_path_buf())
     };
-    let text = absolute.to_string_lossy();
-    let trimmed = text.strip_prefix("\\\\?\\").unwrap_or(&text);
-    trimmed.replace('/', "\\").to_lowercase()
+    strip_verbatim(&absolute.to_string_lossy())
+        .replace('/', "\\")
+        .to_lowercase()
 }
 
 pub fn ext_of(path: &Path) -> String {

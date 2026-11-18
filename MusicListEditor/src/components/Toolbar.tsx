@@ -1,4 +1,5 @@
 import type { AppState } from '../../shared/types';
+import { WindowControls } from './WindowControls';
 
 interface ToolbarProps {
   app: AppState | null;
@@ -15,16 +16,15 @@ interface ToolbarProps {
   onSettings: () => void;
 }
 
+/**
+ * 顶部工具栏：不再显示应用名（原有系统标题栏已去掉），
+ * 窗口按钮移到「设置」右侧，其余按钮整体左移（增量需求 8）。
+ */
 export function Toolbar(props: ToolbarProps) {
   const { app, search, busy, dirtyCount } = props;
 
   return (
-    <header className="toolbar">
-      <div className="brand">
-        <span className="brand-dot" />
-        音乐列表编辑器
-      </div>
-
+    <header className="toolbar" data-tauri-drag-region>
       <button className="btn" onClick={props.onOpenWorkspace} disabled={busy}>
         打开工作区
       </button>
@@ -37,7 +37,7 @@ export function Toolbar(props: ToolbarProps) {
         </button>
       )}
 
-      <div className="spacer" />
+      <div className="spacer" data-tauri-drag-region />
 
       <div className="search">
         <input
@@ -48,7 +48,7 @@ export function Toolbar(props: ToolbarProps) {
         />
       </div>
 
-      <div className="spacer" />
+      <div className="spacer" data-tauri-drag-region />
 
       <button className="btn" onClick={props.onUndo} disabled={!app?.canUndo || busy} title="撤销上次编辑 (Ctrl+Z)">
         撤销
@@ -69,6 +69,7 @@ export function Toolbar(props: ToolbarProps) {
       <button className="btn ghost" onClick={props.onSettings} title="设置">
         设置
       </button>
+      <WindowControls />
     </header>
   );
 }

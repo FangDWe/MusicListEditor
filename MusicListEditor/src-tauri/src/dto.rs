@@ -67,6 +67,8 @@ pub struct AppState {
     pub counts: Counts,
     pub view: ViewState,
     pub can_undo: bool,
+    /// 当前工作区被屏蔽的相对目录（F2.8）
+    pub blocked_dirs: Vec<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -89,6 +91,7 @@ pub struct FailedPlaylist {
 #[serde(rename_all = "camelCase")]
 pub struct ScanStats {
     pub skipped_dirs: usize,
+    pub blocked_dirs: usize,
     pub failed_playlists: Vec<FailedPlaylist>,
 }
 
@@ -163,6 +166,14 @@ pub struct TrackProps {
     pub exists: bool,
 }
 
+/// 被屏蔽的目录（F2.8）：`root` 为工作区根的小写展示路径，`rel` 为相对该根的目录
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockedDir {
+    pub root: String,
+    pub rel: String,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
@@ -172,6 +183,16 @@ pub struct AppConfig {
     pub recent_workspaces: Vec<String>,
     #[serde(default)]
     pub last_workspace: Option<String>,
+    /// 启动时自动恢复上次工作区（F2.2）
+    #[serde(default = "default_true")]
+    pub restore_last: bool,
+    /// 用户屏蔽的目录（F2.8）
+    #[serde(default)]
+    pub blocked_dirs: Vec<BlockedDir>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for AppConfig {
@@ -182,7 +203,21 @@ impl Default for AppConfig {
             extensions: DEFAULT_AUDIO_EXTS.iter().map(|value| value.to_string()).collect(),
             recent_workspaces: Vec::new(),
             last_workspace: None,
+            restore_last: true,
+            blocked_dirs: Vec::new(),
         }
+    }
+}
+
+impl AppConfig {
+    /// 当前工作区被屏蔽的相对目录列表（大小写不敏感）
+    pub fn blocked_for(&self, root: &std::path::Path) -> Vec<String> {
+        let key = crate::model::display_path(root).to_lowercase();
+        self.blocked_dirs
+            .iter()
+            .filter(|item| item.root.to_lowercase() == key)
+            .map(|item| item.rel.clone())
+            .collect()
     }
 }
 

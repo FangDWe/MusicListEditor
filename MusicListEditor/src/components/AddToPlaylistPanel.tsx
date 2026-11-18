@@ -1,6 +1,12 @@
 import { useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import type { Inclusion, PlaylistSummary } from '../../shared/types';
+import {
+  filterPlaylists,
+  groupByDir,
+  loadCollapsedDirs,
+  saveCollapsedDirs,
+} from '../lib/grouping';
 
 interface AddToPlaylistPanelProps {
   trackCount: number;
@@ -19,6 +25,7 @@ export function AddToPlaylistPanel(props: AddToPlaylistPanelProps) {
   const [filter, setFilter] = useState('');
   const [newName, setNewName] = useState('');
   const [creating, setCreating] = useState(false);
+  const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(loadCollapsedDirs);
 
   const inclusionMap = useMemo(() => {
     const map = new Map<number, Inclusion>();
@@ -26,19 +33,26 @@ export function AddToPlaylistPanel(props: AddToPlaylistPanelProps) {
     return map;
   }, [props.inclusion]);
 
-  const visible = useMemo(() => {
-    const keyword = filter.trim().toLowerCase();
-    if (!keyword) return props.playlists;
-    return props.playlists.filter(
-      (pl) => pl.name.toLowerCase().includes(keyword) || pl.relPath.toLowerCase().includes(keyword),
-    );
-  }, [props.playlists, filter]);
+  const visible = useMemo(() => filterPlaylists(props.playlists, filter), [props.playlists, filter]);
+
+  // 与侧栏一致的目录分组（F3.3）
+  const groups = useMemo(() => groupByDir(visible), [visible]);
 
   const toggle = (id: number): void => {
     setChecked((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleDir = (dir: string): void => {
+    setCollapsedDirs((prev) => {
+      const next = new Set(prev);
+      if (next.has(dir)) next.delete(dir);
+      else next.add(dir);
+      saveCollapsedDirs(next);
       return next;
     });
   };
@@ -90,32 +104,57 @@ export function AddToPlaylistPanel(props: AddToPlaylistPanelProps) {
           {props.playlists.length === 0 && (
             <div className="list-empty">当前工作区还没有播放列表，可在下方新建</div>
           )}
-          {visible.map((pl) => {
-            const info = inclusionMap.get(pl.id);
-            const fully = Boolean(info && info.total > 0 && info.included === info.total);
-            const partial = Boolean(info && info.included > 0 && !fully);
-            const disabled = fully && !allowDup;
+          {props.playlists.length > 0 && visible.length === 0 && (
+            <div className="list-empty">没有匹配的播放列表</div>
+          )}
+
+          {groups.map(({ dir, items }) => {
+            const collapsed = dir !== '' && collapsedDirs.has(dir);
             return (
-              <div
-                key={pl.id}
-                className="pl-row"
-                onClick={() => {
-                  if (!disabled) toggle(pl.id);
-                }}
-              >
-                <span
-                  className={`checkbox${fully || checked.has(pl.id) ? ' checked' : partial ? ' partial' : ''}${
-                    disabled ? ' disabled' : ''
-                  }`}
-                />
-                <span className="name">{pl.name}</span>
-                <span className="meta">
-                  {fully
-                    ? '已全部包含'
-                    : partial && info
-                      ? `已含 ${info.included}/${info.total}`
-                      : `${pl.entryCount} 条`}
-                </span>
+              <div key={dir || '__root__'}>
+                {dir !== '' && (
+                  <div
+                    className={`pl-group${collapsed ? ' collapsed' : ''}`}
+                    onClick={() => toggleDir(dir)}
+                    title={`${dir}（点击${collapsed ? '展开' : '折叠'}）`}
+                  >
+                    <span className="chevron" />
+                    <span className="pl-group-label">{dir}</span>
+                    <span className="badge">{items.length}</span>
+                  </div>
+                )}
+
+                {!collapsed &&
+                  items.map((pl) => {
+                    const info = inclusionMap.get(pl.id);
+                    const fully = Boolean(info && info.total > 0 && info.included === info.total);
+                    const partial = Boolean(info && info.included > 0 && !fully);
+                    const disabled = fully && !allowDup;
+                    return (
+                      <div
+                        key={pl.id}
+                        className={`pl-row${dir !== '' ? ' nested' : ''}`}
+                        onClick={() => {
+                          if (!disabled) toggle(pl.id);
+                        }}
+                        title={pl.relPath}
+                      >
+                        <span
+                          className={`checkbox${
+                            fully || checked.has(pl.id) ? ' checked' : partial ? ' partial' : ''
+                          }${disabled ? ' disabled' : ''}`}
+                        />
+                        <span className="name">{pl.name}</span>
+                        <span className="meta">
+                          {fully
+                            ? '已全部包含'
+                            : partial && info
+                              ? `已含 ${info.included}/${info.total}`
+                              : `${pl.entryCount} 条`}
+                        </span>
+                      </div>
+                    );
+                  })}
               </div>
             );
           })}

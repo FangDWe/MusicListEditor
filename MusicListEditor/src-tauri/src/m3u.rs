@@ -1,8 +1,10 @@
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use crate::error::{AppError, AppResult};
-use crate::model::{derive_title, ext_of, norm_id, Encoding, Entry, EntryKind, Eol, ExtInf, Playlist};
+use crate::model::{
+    derive_title, ext_of, norm_id, standard_path, Encoding, Entry, EntryKind, Eol, ExtInf, Playlist,
+};
 
 pub struct Decoded {
     pub text: String,
@@ -205,84 +207,47 @@ pub fn read_playlist_file(path: &Path) -> AppResult<ReadResult> {
     })
 }
 
-/// 写回序列化：未修改条目按原文输出，仅新增条目是生成的行（F4.3）
+/// 写回序列化：一律输出标准格式（F4.3 / 增量需求 1）
+///
+/// 标准格式 = 第一行 `#EXTM3U`，其后每行一个曲目路径；路径为绝对路径、分隔符为 `/`。
+/// 因此 `#EXTINF`、注释、其它指令与空行不会被写回；读取侧仍然保持宽容（F1.2）。
 pub fn serialize_playlist(playlist: &Playlist) -> String {
     let eol = playlist.eol.as_str();
-    let mut out = playlist
-        .entries
-        .iter()
-        .map(|entry| entry.raw.as_str())
-        .collect::<Vec<_>>()
-        .join(eol);
-    if !out.is_empty() {
-        out.push_str(eol);
+    let mut lines: Vec<String> = Vec::with_capacity(playlist.entries.len() + 1);
+    lines.push("#EXTM3U".to_string());
+
+    for entry in &playlist.entries {
+        match entry.kind {
+            EntryKind::Track | EntryKind::Missing => {
+                if let Some(path) = &entry.abs_path {
+                    lines.push(standard_path(path));
+                }
+            }
+            EntryKind::Stream => {
+                // 网络流不是文件路径，原样保留（去掉首尾空白）
+                let text = entry.raw.trim();
+                if !text.is_empty() {
+                    lines.push(text.to_string());
+                }
+            }
+            EntryKind::Directive | EntryKind::Comment | EntryKind::Blank => {}
+        }
     }
+
+    let mut out = lines.join(eol);
+    out.push_str(eol);
     out
 }
 
-/// 计算相对路径；跨盘或无法表示为相对路径时返回 None（F4.3）
-fn relative_to(base: &Path, target: &Path) -> Option<String> {
-    let base_parts: Vec<Component> = base.components().collect();
-    let target_parts: Vec<Component> = target.components().collect();
-    if base_parts.is_empty() || target_parts.is_empty() {
-        return None;
+/// 新增曲目对应的条目：标准格式下只有一行绝对路径（F4.3）
+pub fn make_track_entry(abs_path: &Path) -> Entry {
+    Entry {
+        raw: standard_path(abs_path),
+        kind: EntryKind::Track,
+        abs_path: Some(abs_path.to_path_buf()),
+        track_id: Some(norm_id(abs_path)),
+        extinf: None,
     }
-    match (base_parts.first(), target_parts.first()) {
-        (Some(Component::Prefix(left)), Some(Component::Prefix(right))) if left != right => return None,
-        (Some(Component::RootDir), Some(Component::Prefix(_))) => return None,
-        _ => {}
-    }
-
-    let mut index = 0;
-    while index < base_parts.len()
-        && index < target_parts.len()
-        && base_parts[index] == target_parts[index]
-    {
-        index += 1;
-    }
-    if index == 0 {
-        return None;
-    }
-
-    let mut parts: Vec<String> = Vec::new();
-    for _ in index..base_parts.len() {
-        parts.push("..".to_string());
-    }
-    for component in &target_parts[index..] {
-        parts.push(component.as_os_str().to_string_lossy().to_string());
-    }
-    if parts.is_empty() {
-        return None;
-    }
-    Some(parts.join("\\"))
-}
-
-/// 新增曲目对应的两行：EXTINF + 路径（相对优先，跨盘写绝对）
-pub fn make_track_entries(abs_path: &Path, playlist_dir: &Path, title: &str) -> Vec<Entry> {
-    let shown = relative_to(playlist_dir, abs_path)
-        .unwrap_or_else(|| abs_path.to_string_lossy().to_string());
-
-    vec![
-        Entry {
-            raw: format!("#EXTINF:-1,{title}"),
-            kind: EntryKind::Directive,
-            abs_path: None,
-            track_id: None,
-            extinf: None,
-        },
-        Entry {
-            raw: shown,
-            kind: EntryKind::Track,
-            abs_path: Some(abs_path.to_path_buf()),
-            track_id: Some(norm_id(abs_path)),
-            extinf: Some(ExtInf {
-                duration: None,
-                title: title.to_string(),
-                artist: None,
-                track: None,
-            }),
-        },
-    ]
 }
 
 /// 从条目推导展示标题

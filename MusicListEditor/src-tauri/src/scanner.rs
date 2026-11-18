@@ -10,6 +10,7 @@ pub struct FolderScan {
     pub playlist_paths: Vec<PathBuf>,
     pub track_paths: Vec<PathBuf>,
     pub skipped_dirs: usize,
+    pub blocked_dirs: usize,
     pub cancelled: bool,
 }
 
@@ -18,15 +19,25 @@ const SKIP_DIRS: [&str; 2] = ["$recycle.bin", "system volume information"];
 
 pub type ProgressFn<'a> = &'a (dyn Fn(ScanProgress) + Sync);
 
+/// 判断相对目录是否被用户屏蔽（目录本身或其祖先被屏蔽，F2.8）
+fn is_blocked(rel: &str, blocked: &[String]) -> bool {
+    blocked.iter().any(|item| {
+        let item = item.trim_matches(['\\', '/']);
+        !item.is_empty() && (rel == item || rel.starts_with(&format!("{item}\\")))
+    })
+}
+
 pub fn scan_folder(
     root: &Path,
     audio_exts: &[String],
+    blocked: &[String],
     cancel: &AtomicBool,
     progress: ProgressFn<'_>,
 ) -> FolderScan {
     let mut playlist_paths = Vec::new();
     let mut track_paths = Vec::new();
     let mut skipped_dirs = 0usize;
+    let mut blocked_dirs = 0usize;
     let mut visited = 0usize;
     let mut stack: Vec<(PathBuf, usize)> = vec![(root.to_path_buf(), 0)];
     let mut cancelled = false;
@@ -65,6 +76,14 @@ pub fn scan_folder(
                 if SKIP_DIRS.contains(&name.as_str()) {
                     continue;
                 }
+                let rel = path
+                    .strip_prefix(root)
+                    .map(|value| value.to_string_lossy().replace('/', "\\"))
+                    .unwrap_or_default();
+                if is_blocked(&rel, blocked) {
+                    blocked_dirs += 1;
+                    continue;
+                }
                 stack.push((path, depth + 1));
                 continue;
             }
@@ -99,6 +118,7 @@ pub fn scan_folder(
         playlist_paths,
         track_paths,
         skipped_dirs,
+        blocked_dirs,
         cancelled,
     }
 }

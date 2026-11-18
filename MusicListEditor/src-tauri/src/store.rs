@@ -7,10 +7,10 @@ use std::time::UNIX_EPOCH;
 
 use crate::dto::*;
 use crate::error::{AppError, AppResult};
-use crate::m3u::{self, make_track_entries, serialize_playlist};
+use crate::m3u::{self, make_track_entry, serialize_playlist};
 use crate::model::{
-    derive_title, ext_of, norm_id, Encoding, Entry, EntryKind, Eol, Fingerprint, Playlist, Track,
-    TrackId,
+    derive_title, display_path, ext_of, norm_id, Encoding, Entry, EntryKind, Eol, Fingerprint,
+    Playlist, Track, TrackId,
 };
 use crate::scanner::{self, ProgressFn};
 
@@ -54,6 +54,8 @@ pub struct WorkspaceStore {
     next_id: u64,
     undo: Vec<UndoOp>,
     skipped_dirs: usize,
+    blocked_dirs: usize,
+    blocked_rel: Vec<String>,
     failed_playlists: Vec<FailedPlaylist>,
 }
 
@@ -79,6 +81,8 @@ impl WorkspaceStore {
             next_id: 1,
             undo: Vec::new(),
             skipped_dirs: 0,
+            blocked_dirs: 0,
+            blocked_rel: Vec::new(),
             failed_playlists: Vec::new(),
         }
     }
@@ -86,8 +90,14 @@ impl WorkspaceStore {
     pub fn scan_stats(&self) -> ScanStats {
         ScanStats {
             skipped_dirs: self.skipped_dirs,
+            blocked_dirs: self.blocked_dirs,
             failed_playlists: self.failed_playlists.clone(),
         }
+    }
+
+    /// 当前工作区根（未打开时 `None`）
+    pub fn root(&self) -> Option<PathBuf> {
+        self.root.clone()
     }
 
     // ------------------------------------------------------------ workspace
@@ -120,7 +130,8 @@ impl WorkspaceStore {
             }
         }
 
-        let scan = scanner::scan_folder(&root, &config.extensions, cancel, progress);
+        let blocked = config.blocked_for(&root);
+        let scan = scanner::scan_folder(&root, &config.extensions, &blocked, cancel, progress);
         if scan.cancelled {
             return Err(AppError::new("E1002", "扫描已取消"));
         }
@@ -140,6 +151,8 @@ impl WorkspaceStore {
         self.root = Some(root.clone());
         self.single = None;
         self.skipped_dirs = scan.skipped_dirs;
+        self.blocked_dirs = scan.blocked_dirs;
+        self.blocked_rel = blocked;
         self.failed_playlists = failed;
 
         let mut playlists: Vec<Playlist> = Vec::new();
@@ -309,11 +322,11 @@ impl WorkspaceStore {
             .sum();
         AppState {
             workspace: self.root.as_ref().map(|root| WorkspaceInfo {
-                root: root.to_string_lossy().to_string(),
+                root: display_path(root),
                 name: root
                     .file_name()
                     .map(|value| value.to_string_lossy().to_string())
-                    .unwrap_or_else(|| root.to_string_lossy().to_string()),
+                    .unwrap_or_else(|| display_path(root)),
             }),
             playlists: self.playlists.iter().map(|item| self.summary(item)).collect(),
             counts: Counts {
@@ -324,6 +337,7 @@ impl WorkspaceStore {
             },
             view,
             can_undo: !self.undo.is_empty(),
+            blocked_dirs: self.blocked_rel.clone(),
         }
     }
 
@@ -402,7 +416,7 @@ impl WorkspaceStore {
                 album: None,
                 duration: entry.extinf.as_ref().and_then(|info| info.duration),
                 ext: m3u::entry_ext(entry),
-                path: entry.abs_path.as_ref().map(|path| path.to_string_lossy().to_string()),
+                path: entry.abs_path.as_ref().map(|path| display_path(path)),
                 status: status.to_string(),
                 ref_count: track.map(|item| item.ref_count).unwrap_or(0),
                 ref_names: track.map(|item| item.ref_names.clone()).unwrap_or_default(),
@@ -430,7 +444,7 @@ impl WorkspaceStore {
                 album: None,
                 duration: None,
                 ext: Some(track.ext.clone()),
-                path: Some(track.path.to_string_lossy().to_string()),
+                path: Some(display_path(&track.path)),
                 status: "ok".to_string(),
                 ref_count: track.ref_count,
                 ref_names: track.ref_names.clone(),
@@ -482,11 +496,6 @@ impl WorkspaceStore {
                 entries: self.playlists[index].entries.clone(),
                 dirty: self.playlists[index].dirty,
             };
-            let playlist_path = self.playlists[index].path.clone();
-            let dir = playlist_path
-                .parent()
-                .map(|value| value.to_path_buf())
-                .unwrap_or_default();
             let name = self.playlists[index].name.clone();
             let before = self.playlists[index].entries.len();
 
@@ -512,14 +521,7 @@ impl WorkspaceStore {
                     skipped += 1;
                     continue;
                 }
-                let title = self
-                    .tracks
-                    .get(track_id)
-                    .map(|track| track.title.clone())
-                    .unwrap_or_else(|| derive_title(&abs));
-                self.playlists[index]
-                    .entries
-                    .extend(make_track_entries(&abs, &dir, &title));
+                self.playlists[index].entries.push(make_track_entry(&abs));
                 added.insert(track_id.clone());
             }
 
@@ -804,6 +806,15 @@ impl WorkspaceStore {
         };
         self.playlists[index].has_bom = config.write_bom;
 
+        // 写回是标准化过程（F4.3）：落盘后按新文件重建内存条目，保证内存与磁盘一致
+        if let Ok(parsed) = m3u::read_playlist_file(&path) {
+            self.playlists[index].entries = parsed.entries;
+            self.playlists[index].eol = parsed.eol;
+            self.playlists[index].fingerprint = fingerprint(&path);
+            self.rebuild_references();
+            self.rebuild_paths();
+        }
+
         Ok(SaveResult {
             id: playlist_id,
             name: self.playlists[index].name.clone(),
@@ -894,7 +905,7 @@ impl WorkspaceStore {
             size = meta.len();
         }
         Ok(TrackProps {
-            path: path.to_string_lossy().to_string(),
+            path: display_path(&path),
             size,
             ext: ext_of(&path),
             ref_count: track.map(|item| item.ref_count).unwrap_or(0),
@@ -987,7 +998,7 @@ impl WorkspaceStore {
             id: playlist.id,
             name: playlist.name.clone(),
             rel_path: playlist.rel_path.clone(),
-            path: playlist.path.to_string_lossy().to_string(),
+            path: display_path(&playlist.path),
             entry_count,
             missing_count: self.count_missing(playlist),
             dirty: playlist.dirty,
@@ -1063,7 +1074,7 @@ impl WorkspaceStore {
 fn relative_path(root: &Path, target: &Path) -> String {
     match target.strip_prefix(root) {
         Ok(rest) => rest.to_string_lossy().to_string(),
-        Err(_) => target.to_string_lossy().to_string(),
+        Err(_) => display_path(target),
     }
 }
 

@@ -14,6 +14,8 @@ export type DialogState =
 interface DialogProps {
   state: DialogState;
   busy: boolean;
+  /** 当前工作区被屏蔽的目录（F2.8） */
+  blockedDirs: string[];
   onClose: () => void;
   onCreatePlaylist: (name: string) => void;
   onRenamePlaylist: (id: number, name: string) => void;
@@ -21,6 +23,7 @@ interface DialogProps {
   onOverwrite: (id: number) => void;
   onReload: (id: number) => void;
   onConfigChange: (patch: Partial<AppConfig>) => void;
+  onUnblockDir: (dir: string) => void;
 }
 
 export function Dialog(props: DialogProps) {
@@ -141,6 +144,17 @@ export function Dialog(props: DialogProps) {
             <div
               className="settings-row"
               style={{ cursor: 'pointer' }}
+              onClick={() => props.onConfigChange({ restoreLast: !state.config.restoreLast })}
+            >
+              <span>启动时恢复上次工作区</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span className={`checkbox${state.config.restoreLast ? ' checked' : ''}`} />
+                {state.config.restoreLast ? '开' : '关'}
+              </span>
+            </div>
+            <div
+              className="settings-row"
+              style={{ cursor: 'pointer' }}
               onClick={() => props.onConfigChange({ writeBom: !state.config.writeBom })}
             >
               <span>写回 UTF-8 时写入 BOM</span>
@@ -160,8 +174,29 @@ export function Dialog(props: DialogProps) {
                 {state.config.backup ? '开' : '关'}
               </span>
             </div>
+
+            <div className="settings-group-title">已屏蔽的文件夹（含子文件夹）</div>
+            {props.blockedDirs.length === 0 ? (
+              <p style={{ fontSize: 12, color: 'var(--color-text-3)' }}>
+                暂无。在侧栏右键点击目录分组即可屏蔽。
+              </p>
+            ) : (
+              <div className="settings-list">
+                {props.blockedDirs.map((dir) => (
+                  <div className="settings-row" key={dir}>
+                    <span className="settings-path" title={dir}>
+                      {dir}
+                    </span>
+                    <button className="btn ghost" onClick={() => props.onUnblockDir(dir)} disabled={busy}>
+                      恢复
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
             <p style={{ marginTop: 10, fontSize: 12, color: 'var(--color-text-3)' }}>
-              写回编码固定为 UTF-8（需求文档 Q3）；源文件为其它编码时保存会自动转换并强制备份。
+              写回编码固定为 UTF-8（需求文档 Q3），格式统一为「#EXTM3U + 每行一条绝对路径」；源文件为其它编码时保存会自动转换并强制备份。
             </p>
             <div className="dialog-actions">
               <button className="btn primary" onClick={onClose}>

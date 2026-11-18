@@ -51,6 +51,8 @@ export interface AppState {
   counts: { playlists: number; tracks: number; unclassified: number; missing: number };
   view: ViewState;
   canUndo: boolean;
+  /** 当前工作区被屏蔽的相对目录（F2.8） */
+  blockedDirs: string[];
 }
 
 export interface ScanProgress {
@@ -104,6 +106,17 @@ export interface AppConfig {
   extensions: string[];
   recentWorkspaces: string[];
   lastWorkspace?: string;
+  /** 启动时自动恢复上次工作区（F2.2） */
+  restoreLast: boolean;
+  /** 已屏蔽的目录（F2.8），root 为工作区根 */
+  blockedDirs: { root: string; rel: string }[];
+}
+
+/** 一次扫描的统计信息（§4.5） */
+export interface ScanStats {
+  skippedDirs: number;
+  blockedDirs: number;
+  failedPlaylists: { path: string; reason: string }[];
 }
 
 export interface CreatePlaylistOptions {

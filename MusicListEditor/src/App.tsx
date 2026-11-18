@@ -17,7 +17,7 @@ import type {
   ScanProgress,
   ViewKind,
 } from '../shared/types';
-import { ApiError, api, onFsChanged, onScanProgress, type ScanStats } from './lib/api';
+import { ApiError, api, logEvent, onFsChanged, onScanProgress, type ScanStats } from './lib/api';
 import { Toolbar } from './components/Toolbar';
 import { Sidebar } from './components/Sidebar';
 import { TrackTable, type SortKey, type SortSpec } from './components/TrackTable';
@@ -27,6 +27,7 @@ import { Toast, type ToastState } from './components/Toast';
 import { Dialog, type DialogState } from './components/Dialog';
 import { EmptyState } from './components/EmptyState';
 import { ScanBar } from './components/ScanBar';
+import { ResizeHandles } from './components/ResizeHandles';
 
 export function App() {
   const [app, setApp] = useState<AppState | null>(null);
@@ -121,6 +122,7 @@ export function App() {
       if (!stats) return;
       const parts: string[] = [];
       if (stats.skippedDirs > 0) parts.push(`已跳过 ${stats.skippedDirs} 个无权限目录`);
+      if (stats.blockedDirs > 0) parts.push(`已屏蔽 ${stats.blockedDirs} 个目录`);
       if (stats.failedPlaylists.length > 0) parts.push(`${stats.failedPlaylists.length} 个播放列表解析失败`);
       if (parts.length > 0) showToast(parts.join('，'), { duration: 6000 });
     },
@@ -134,38 +136,63 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    // 注意：React StrictMode 在开发模式下会「执行 → 清理 → 再执行」。
+    // 这里不能用 cancelled 标志在清理时中止首次加载，否则第二次执行被 restoredRef 挡掉，
+    // 配置永远读不到 → 设置按钮点不开、上次工作区也不会恢复。
     if (restoredRef.current) return;
     restoredRef.current = true;
-    let cancelled = false;
     void (async () => {
+      let cfg: AppConfig;
       try {
-        const cfg = await api.configGet();
-        if (cancelled) return;
-        setConfig(cfg);
-        if (!cfg.lastWorkspace) return;
-        setBusy(true);
-        setScan({ phase: '恢复上次工作区', done: 0, total: 0, currentPath: cfg.lastWorkspace });
-        try {
-          const res = await api.openWorkspace(cfg.lastWorkspace);
-          if (cancelled) return;
-          setApp(res.state);
-          reportScan(res.scan);
-        } catch {
-          // 上次工作区不可用时静默失败，保留空状态
-        } finally {
-          if (!cancelled) {
-            setBusy(false);
-            setScan(null);
-          }
-        }
-      } catch {
-        // 配置读取失败时忽略
+        cfg = await api.configGet();
+      } catch (error) {
+        logEvent('error', `读取配置失败：${String(error)}`);
+        return;
+      }
+      setConfig(cfg);
+      if (!cfg.restoreLast || !cfg.lastWorkspace) return;
+      setBusy(true);
+      setScan({ phase: '恢复上次工作区', done: 0, total: 0, currentPath: cfg.lastWorkspace });
+      try {
+        const res = await api.openWorkspace(cfg.lastWorkspace);
+        setApp(res.state);
+        reportScan(res.scan);
+      } catch (error) {
+        // 上次工作区不可用时静默失败，保留空状态（F2.2）
+        logEvent('warn', `恢复上次工作区失败：${String(error)}`);
+      } finally {
+        setBusy(false);
+        setScan(null);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
   }, [reportScan]);
+
+  // 屏蔽 WebView 默认右键菜单（增量需求 4）；输入框保留系统菜单以便粘贴
+  useEffect(() => {
+    const onContextMenu = (event: globalThis.MouseEvent): void => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('input, textarea, [contenteditable="true"]')) return;
+      event.preventDefault();
+    };
+    window.addEventListener('contextmenu', onContextMenu);
+    return () => window.removeEventListener('contextmenu', onContextMenu);
+  }, []);
+
+  // 前端异常写入日志文件（§5.5）
+  useEffect(() => {
+    const onError = (event: ErrorEvent): void => {
+      logEvent('error', `未捕获异常：${event.message} @ ${event.filename}:${event.lineno}`);
+    };
+    const onRejection = (event: PromiseRejectionEvent): void => {
+      logEvent('error', `未处理的 Promise 拒绝：${String(event.reason)}`);
+    };
+    window.addEventListener('error', onError);
+    window.addEventListener('unhandledrejection', onRejection);
+    return () => {
+      window.removeEventListener('error', onError);
+      window.removeEventListener('unhandledrejection', onRejection);
+    };
+  }, []);
 
   // --------------------------------------------------------------- 派生数据
   const sortedRows = useMemo(() => {
@@ -335,6 +362,26 @@ export function App() {
       handleError(error);
     }
   }, [applyState, showToast, handleError]);
+
+  /** 屏蔽 / 恢复目录（含子文件夹），随后后端重新扫描（F2.8） */
+  const blockDir = useCallback(
+    async (dir: string, blocked = true): Promise<void> => {
+      setBusy(true);
+      setScan({ phase: blocked ? '屏蔽目录' : '恢复目录', done: 0, total: 0, currentPath: dir });
+      try {
+        const res = await api.blockDir(dir, blocked);
+        applyState(res.state);
+        reportScan(res.scan);
+        showToast(blocked ? `已屏蔽「${dir}」及其子文件夹` : `已恢复「${dir}」`);
+      } catch (error) {
+        handleError(error);
+      } finally {
+        setBusy(false);
+        setScan(null);
+      }
+    },
+    [applyState, reportScan, showToast, handleError],
+  );
 
   const submitAdd = useCallback(
     async (playlistIds: number[], allowDup: boolean): Promise<void> => {
@@ -531,6 +578,17 @@ export function App() {
     [handleError],
   );
 
+  /** 打开设置：配置尚未加载时先补读，避免按钮「点了没反应」 */
+  const openSettings = useCallback(async (): Promise<void> => {
+    try {
+      const cfg = config ?? (await api.configGet());
+      if (!config) setConfig(cfg);
+      setDialog({ kind: 'settings', config: cfg });
+    } catch (error) {
+      handleError(error);
+    }
+  }, [config, handleError]);
+
   // --------------------------------------------------------------- 交互
   const handleRowClick = useCallback(
     (row: Row, index: number, event: MouseEvent): void => {
@@ -687,6 +745,7 @@ export function App() {
 
   return (
     <div className="app">
+      <ResizeHandles />
       <Toolbar
         app={app}
         search={search}
@@ -699,7 +758,7 @@ export function App() {
         onSave={() => void saveCurrent()}
         onSaveAll={() => void saveAll()}
         onUndo={() => void undo()}
-        onSettings={() => config && setDialog({ kind: 'settings', config })}
+        onSettings={() => void openSettings()}
       />
 
       {scan && (
@@ -718,6 +777,7 @@ export function App() {
           onRenamePlaylist={(id, current) => setDialog({ kind: 'rename', playlistId: id, current })}
           onDeletePlaylist={(id, name) => setDialog({ kind: 'confirm-delete', playlistId: id, name })}
           onPromoteSingle={() => void promoteSingle()}
+          onBlockDir={(dir) => void blockDir(dir, true)}
         />
 
         <div
@@ -798,6 +858,7 @@ export function App() {
             key={`${dialog.kind}-${'playlistId' in dialog ? dialog.playlistId : ''}`}
             state={dialog}
             busy={busy}
+            blockedDirs={app?.blockedDirs ?? []}
             onClose={() => setDialog(null)}
             onCreatePlaylist={(name) => void createPlaylist(name)}
             onRenamePlaylist={(id, name) => void renamePlaylist(id, name)}
@@ -815,6 +876,7 @@ export function App() {
               })();
             }}
             onConfigChange={(patch) => void changeConfig(patch)}
+            onUnblockDir={(dir) => void blockDir(dir, false)}
           />
         )}
       </AnimatePresence>

@@ -1,5 +1,8 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import type { AppState, PlaylistSummary, ViewKind } from '../../shared/types';
+import { AnimatePresence } from 'motion/react';
+import type { AppState, ViewKind } from '../../shared/types';
+import { groupByDir, dirOf, loadCollapsedDirs, saveCollapsedDirs } from '../lib/grouping';
+import { ContextMenu, type MenuEntry } from './ContextMenu';
 
 interface SidebarProps {
   app: AppState | null;
@@ -12,24 +15,8 @@ interface SidebarProps {
   onRenamePlaylist: (id: number, current: string) => void;
   onDeletePlaylist: (id: number, name: string) => void;
   onPromoteSingle: () => void;
-}
-
-/** 取相对路径中的目录部分，用于按目录分组 */
-function dirOf(relPath: string): string {
-  const index = relPath.lastIndexOf('\\');
-  return index > 0 ? relPath.slice(0, index) : '';
-}
-
-const COLLAPSE_KEY = 'mle.collapsedDirs';
-
-function loadCollapsed(): Set<string> {
-  try {
-    const raw = window.localStorage.getItem(COLLAPSE_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
-    return new Set(Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : []);
-  } catch {
-    return new Set();
-  }
+  /** 屏蔽目录（含子文件夹），F2.8 */
+  onBlockDir: (dir: string) => void;
 }
 
 export function Sidebar(props: SidebarProps) {
@@ -39,19 +26,11 @@ export function Sidebar(props: SidebarProps) {
   const view = app?.view;
   const counts = app?.counts;
 
-  const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(loadCollapsed);
+  const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(loadCollapsedDirs);
+  const [menu, setMenu] = useState<{ x: number; y: number; dir: string } | null>(null);
 
   // 按相对目录分组；根目录的列表不显示分组头
-  const groups = useMemo(() => {
-    const map = new Map<string, PlaylistSummary[]>();
-    for (const playlist of playlists) {
-      const dir = dirOf(playlist.relPath);
-      const list = map.get(dir);
-      if (list) list.push(playlist);
-      else map.set(dir, [playlist]);
-    }
-    return [...map.entries()].sort((left, right) => left[0].localeCompare(right[0], 'zh-Hans-CN'));
-  }, [playlists]);
+  const groups = useMemo(() => groupByDir(playlists), [playlists]);
 
   // 选中某个列表时，自动展开它所在的分组
   useEffect(() => {
@@ -64,7 +43,7 @@ export function Sidebar(props: SidebarProps) {
       if (!prev.has(dir)) return prev;
       const next = new Set(prev);
       next.delete(dir);
-      window.localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...next]));
+      saveCollapsedDirs(next);
       return next;
     });
   }, [view, playlists]);
@@ -74,7 +53,7 @@ export function Sidebar(props: SidebarProps) {
       const next = new Set(prev);
       if (next.has(dir)) next.delete(dir);
       else next.add(dir);
-      window.localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...next]));
+      saveCollapsedDirs(next);
       return next;
     });
   };
@@ -85,6 +64,26 @@ export function Sidebar(props: SidebarProps) {
     if (kind === 'playlist') return view.playlistId === (playlistId ?? null);
     return true;
   };
+
+  const menuItems: MenuEntry[] = menu
+    ? [
+        {
+          key: 'collapse',
+          label: collapsedDirs.has(menu.dir) ? '展开此分组' : '折叠此分组',
+          onClick: () => toggleDir(menu.dir),
+        },
+        {
+          key: 'block',
+          label: '屏蔽此文件夹',
+          hint: '含子文件夹',
+          danger: true,
+          separatorBefore: true,
+          onClick: () => props.onBlockDir(menu.dir),
+        },
+      ]
+    : [];
+
+  const blockedCount = app?.blockedDirs.length ?? 0;
 
   return (
     <aside className="sidebar" style={{ width: props.width }}>
@@ -122,7 +121,7 @@ export function Sidebar(props: SidebarProps) {
 
           {playlists.length === 0 && <div className="side-item muted">尚无播放列表</div>}
 
-          {groups.map(([dir, items]) => {
+          {groups.map(({ dir, items }) => {
             const collapsed = dir !== '' && collapsedDirs.has(dir);
             return (
               <Fragment key={dir || '__root__'}>
@@ -130,7 +129,11 @@ export function Sidebar(props: SidebarProps) {
                   <div
                     className={`side-group${collapsed ? ' collapsed' : ''}`}
                     onClick={() => toggleDir(dir)}
-                    title={`${dir}（点击${collapsed ? '展开' : '折叠'}）`}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      setMenu({ x: event.clientX, y: event.clientY, dir });
+                    }}
+                    title={`${dir}（点击${collapsed ? '展开' : '折叠'}，右键可屏蔽）`}
                   >
                     <span className="chevron" />
                     <span className="side-group-label">{dir}</span>
@@ -191,6 +194,15 @@ export function Sidebar(props: SidebarProps) {
             <span className="badge">{counts?.tracks ?? 0}</span>
           </div>
 
+          {blockedCount > 0 && (
+            <div
+              className="side-blocked"
+              title={`已屏蔽：\n${app?.blockedDirs.join('\n')}\n\n在「设置」中可恢复`}
+            >
+              已屏蔽 {blockedCount} 个文件夹（设置中恢复）
+            </div>
+          )}
+
           <div className="side-sep" />
         </>
       )}
@@ -228,6 +240,12 @@ export function Sidebar(props: SidebarProps) {
           {(counts?.missing ?? 0) > 0 ? ` · 缺失 ${counts?.missing}` : ''}
         </div>
       )}
+
+      <AnimatePresence>
+        {menu && (
+          <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />
+        )}
+      </AnimatePresence>
     </aside>
   );
 }

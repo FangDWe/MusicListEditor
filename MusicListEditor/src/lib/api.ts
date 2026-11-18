@@ -7,6 +7,7 @@ import type {
   Inclusion,
   SaveResult,
   ScanProgress,
+  ScanStats,
   TrackProps,
   ViewKind,
 } from '../../shared/types';
@@ -35,10 +36,7 @@ async function call<T>(channel: string, payload: Payload = {}): Promise<T> {
   }
 }
 
-export interface ScanStats {
-  skippedDirs: number;
-  failedPlaylists: { path: string; reason: string }[];
-}
+export type { ScanStats };
 
 export interface OpenResult {
   state: AppState;
@@ -93,7 +91,15 @@ export const api = {
   scanStats: () => call<ScanStats>('scan_stats'),
   configGet: () => call<AppConfig>('config_get'),
   configSet: (patch: Partial<AppConfig>) => call<AppConfig>('config_set', { patch }),
+
+  /** 屏蔽 / 恢复目录（含子目录），返回重新扫描后的状态（F2.8） */
+  blockDir: (dir: string, blocked: boolean) => call<OpenResult>('folder_block', { dir, blocked }),
 };
+
+/** 把前端日志写入 Rust 日志文件（§5.5），失败时静默 */
+export function logEvent(level: 'info' | 'warn' | 'error', message: string): void {
+  void invoke('log_write', { level, message }).catch(() => undefined);
+}
 
 /** 订阅扫描进度（F2.6） */
 export function onScanProgress(callback: (progress: ScanProgress) => void): () => void {

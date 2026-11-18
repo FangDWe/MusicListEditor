@@ -51,7 +51,10 @@ where
         action(&mut guard, &config_value, &cancel, &app)
     })
     .await
-    .map_err(|error| AppError::new("E5000", format!("任务失败：{error}")))?
+    .map_err(|error| {
+        log::error!("后台任务失败：{error}");
+        AppError::new("E5000", format!("任务失败：{error}"))
+    })?
 }
 
 
@@ -91,12 +94,25 @@ pub async fn workspace_open(
             let _ = progress_app.emit("scan:progress", payload);
         };
 
+        log::info!("打开工作区：{}", crate::model::display_path(&target));
         let mut guard = store
             .lock()
             .map_err(|_| AppError::new("E5000", "状态锁失败"))?;
         let state_value = guard.open_workspace(&target, &config_value, &cancel, &progress)?;
         let stats = guard.scan_stats();
         drop(guard);
+        log::info!(
+            "扫描完成：{} 个播放列表 / {} 首曲目 / {} 未归类，跳过 {} 个无权限目录，屏蔽 {} 个目录，失败 {} 个列表",
+            state_value.counts.playlists,
+            state_value.counts.tracks,
+            state_value.counts.unclassified,
+            stats.skipped_dirs,
+            stats.blocked_dirs,
+            stats.failed_playlists.len()
+        );
+        for item in &stats.failed_playlists {
+            log::warn!("播放列表解析失败：{}（{}）", item.path, item.reason);
+        }
 
         Ok(OpenResult {
             state: state_value,
@@ -162,11 +178,107 @@ pub async fn workspace_rescan(app: AppHandle, state: State<'_, AppContext>) -> A
     .map_err(|error| AppError::new("E5000", format!("任务失败：{error}")))?
 }
 
+/// 屏蔽 / 恢复工作区内的某个目录（含其子目录），随后重新扫描（F2.8）
+#[tauri::command]
+pub async fn folder_block(
+    app: AppHandle,
+    state: State<'_, AppContext>,
+    dir: String,
+    blocked: bool,
+) -> AppResult<OpenResult> {
+    let store = state.store.clone();
+    let config_arc = state.config.clone();
+    let cancel = state.cancel.clone();
+    let app_handle = app.clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = {
+            let guard = store
+                .lock()
+                .map_err(|_| AppError::new("E5000", "状态锁失败"))?;
+            guard
+                .root()
+                .ok_or_else(|| AppError::new("E1001", "请先打开工作区"))?
+        };
+        let key = crate::model::display_path(&root).to_lowercase();
+        let rel = dir
+            .trim_matches(|value| value == '\\' || value == '/')
+            .to_string();
+        if rel.is_empty() {
+            return Err(AppError::new("E4007", "不能屏蔽工作区根目录"));
+        }
+
+        {
+            let mut guard = config_arc
+                .lock()
+                .map_err(|_| AppError::new("E5000", "配置锁失败"))?;
+            if blocked {
+                let exists = guard
+                    .blocked_dirs
+                    .iter()
+                    .any(|item| item.root.to_lowercase() == key && item.rel.eq_ignore_ascii_case(&rel));
+                if !exists {
+                    guard.blocked_dirs.push(BlockedDir {
+                        root: key.clone(),
+                        rel: rel.clone(),
+                    });
+                }
+            } else {
+                guard.blocked_dirs.retain(|item| {
+                    !(item.root.to_lowercase() == key && item.rel.eq_ignore_ascii_case(&rel))
+                });
+            }
+        }
+
+        let snapshot = config_arc
+            .lock()
+            .map_err(|_| AppError::new("E5000", "配置锁失败"))?
+            .clone();
+        config::save(&app_handle, &snapshot);
+        log::info!(
+            "{}目录：{}",
+            if blocked { "屏蔽" } else { "恢复" },
+            rel
+        );
+
+        cancel.store(false, Ordering::Relaxed);
+        let progress_app = app_handle.clone();
+        let progress = move |payload: ScanProgress| {
+            let _ = progress_app.emit("scan:progress", payload);
+        };
+        let mut guard = store
+            .lock()
+            .map_err(|_| AppError::new("E5000", "状态锁失败"))?;
+        let state_value = guard.rescan(&snapshot, &cancel, &progress)?;
+        let stats = guard.scan_stats();
+        Ok(OpenResult {
+            state: state_value,
+            scan: stats,
+        })
+    })
+    .await
+    .map_err(|error| {
+        log::error!("屏蔽目录失败：{error}");
+        AppError::new("E5000", format!("任务失败：{error}"))
+    })?
+}
+
 #[tauri::command]
 pub async fn workspace_close(app: AppHandle, state: State<'_, AppContext>) -> AppResult<AppState> {
     if let Ok(mut guard) = state.watcher.lock() {
         guard.stop();
     }
+    // 用户主动关闭工作区后，下次启动不再自动恢复（F2.2）
+    let snapshot = {
+        let mut guard = state
+            .config
+            .lock()
+            .map_err(|_| AppError::new("E5000", "状态锁失败"))?;
+        guard.last_workspace = None;
+        guard.clone()
+    };
+    config::save(&app, &snapshot);
+    log::info!("关闭工作区");
     with_store(app, state, |store, _cfg, _cancel, _app| Ok(store.close())).await
 }
 
@@ -351,6 +463,12 @@ pub async fn playlist_save(
 ) -> AppResult<SavePayload> {
     with_store(app, state, move |store, cfg, _cancel, _app| {
         let result = store.save_playlist(id, force.unwrap_or(false), cfg)?;
+        log::info!(
+            "保存播放列表：{}（备份 {}，编码转换 {}）",
+            result.name,
+            result.backed_up.unwrap_or(false),
+            result.converted.unwrap_or(false)
+        );
         Ok(SavePayload {
             results: vec![result],
             state: store.state(),
@@ -366,7 +484,22 @@ pub async fn playlist_save_all(
     force: Option<bool>,
 ) -> AppResult<SavePayload> {
     with_store(app, state, move |store, cfg, _cancel, _app| {
-        Ok(store.save_all(force.unwrap_or(false), cfg))
+        let payload = store.save_all(force.unwrap_or(false), cfg);
+        let ok = payload.results.iter().filter(|item| item.ok).count();
+        let failed = payload.results.len() - ok;
+        if failed > 0 {
+            log::warn!("批量保存：成功 {ok} 个，失败 {failed} 个");
+            for item in payload.results.iter().filter(|item| !item.ok) {
+                log::warn!(
+                    "保存失败：{}（{}）",
+                    item.name,
+                    item.error.clone().unwrap_or_default()
+                );
+            }
+        } else {
+            log::info!("批量保存：成功 {ok} 个");
+        }
+        Ok(payload)
     })
     .await
 }
@@ -448,6 +581,19 @@ pub fn clipboard_write(text: String) -> AppResult<()> {
 #[tauri::command]
 pub fn cancel_scan(state: State<'_, AppContext>) -> AppResult<()> {
     state.cancel.store(true, Ordering::Relaxed);
+    log::warn!("用户取消扫描");
+    Ok(())
+}
+
+/// 前端日志入口（§5.5）：WebView 侧的错误与关键操作统一写入 Rust 日志文件
+#[tauri::command]
+pub fn log_write(level: String, message: String) -> AppResult<()> {
+    match level.as_str() {
+        "error" => log::error!(target: "webview", "{message}"),
+        "warn" => log::warn!(target: "webview", "{message}"),
+        "debug" => log::debug!(target: "webview", "{message}"),
+        _ => log::info!(target: "webview", "{message}"),
+    }
     Ok(())
 }
 
@@ -502,6 +648,9 @@ pub fn config_set(
     if let Some(value) = patch.get("lastWorkspace").and_then(|item| item.as_str()) {
         guard.last_workspace = Some(value.to_string());
     }
+    if let Some(value) = patch.get("restoreLast").and_then(|item| item.as_bool()) {
+        guard.restore_last = value;
+    }
     let snapshot = guard.clone();
     drop(guard);
     config::save(&app, &snapshot);
@@ -530,9 +679,12 @@ fn open_with_default(_path: &Path) -> AppResult<()> {
 
 #[cfg(windows)]
 fn reveal_in_explorer(path: &Path) -> AppResult<()> {
-    let argument = format!("/select,{}", path.to_string_lossy());
+    use std::os::windows::process::CommandExt;
+    // `/select,` 与路径必须拼成一条「原始参数」：若作为普通 arg 传入，
+    // std 会给含空格的整串加引号（`"/select,C:\My Music\a.mp3"`），explorer 会把它当文件名。
+    let argument = format!("/select,\"{}\"", crate::model::display_path(path));
     std::process::Command::new("explorer")
-        .arg(argument)
+        .raw_arg(argument)
         .spawn()
         .map(|_| ())
         .map_err(|error| AppError::io("打开资源管理器失败", error))
