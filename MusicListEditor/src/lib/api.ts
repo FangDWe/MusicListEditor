@@ -4,11 +4,14 @@ import type {
   AddReport,
   AppConfig,
   AppState,
+  DeleteReport,
   Inclusion,
   SaveResult,
   ScanProgress,
   ScanStats,
+  TagPatch,
   TrackProps,
+  TrackTags,
   ViewKind,
 } from '../../shared/types';
 
@@ -84,6 +87,13 @@ export const api = {
   openTrack: (trackId: string) => call<null>('track_open_external', { trackId }),
   revealTrack: (trackId: string) => call<null>('track_reveal', { trackId }),
   trackProperties: (trackId: string) => call<TrackProps>('track_properties', { trackId }),
+  deleteTracks: (trackIds: string[]) =>
+    call<{ report: DeleteReport; state: AppState }>('tracks_delete', { trackIds }),
+  trackTags: (trackId: string) => call<TrackTags>('track_tags_get', { trackId }),
+  saveTrackTags: (trackId: string, patch: TagPatch) =>
+    call<{ tags: TrackTags; state: AppState }>('track_tags_save', { trackId, patch }),
+  /** 读本地图片为 data URL（封面预览 / 截取用） */
+  imageDataUrl: (path: string) => call<string>('image_data_url', { path }),
   copyText: (text: string) => call<null>('clipboard_write', { text }),
 
   undo: () => call<AppState>('undo'),

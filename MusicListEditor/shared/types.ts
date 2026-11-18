@@ -100,6 +100,35 @@ export interface TrackProps {
   exists: boolean;
 }
 
+/** 歌曲标签（F6） */
+export interface TrackTags {
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  /** `data:<mime>;base64,...`，无封面为 null */
+  coverDataUrl: string | null;
+  ext: string;
+  editable: boolean;
+}
+
+export interface TagPatch {
+  title?: string;
+  artist?: string;
+  album?: string;
+  /** 未截取时：用磁盘图片替换第一张封面 */
+  coverPath?: string;
+  /** 截取后：`data:<mime>;base64,...`，优先于 coverPath */
+  coverDataUrl?: string;
+}
+
+/** 删除歌曲的结果（F4.6） */
+export interface DeleteReport {
+  deleted: number;
+  failed: { trackId: string; name: string; reason: string }[];
+  affectedPlaylists: number;
+  recordPath: string;
+}
+
 export interface AppConfig {
   writeBom: boolean;
   backup: boolean;

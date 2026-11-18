@@ -13,6 +13,8 @@
   --color-danger: #e5484d;
   --color-warning: #f5a524;
   --color-success: #22a06b;
+  /* 歌曲列表区域底色（§3.1.6） */
+  --color-list-bg: #f8fafc;
 
   /* 圆角与阴影 */
   --radius-sm: 6px;
@@ -32,8 +34,8 @@
   --dur-base: 180ms;
   --dur-slow: 220ms;
 
-  /* 表格列宽 */
-  --table-grid: 48px minmax(200px, 2.2fr) minmax(110px, 1fr) minmax(110px, 1fr) 76px 64px 92px 80px;
+  /* 表格列宽（§3.1.6：艺术家 / 专辑 / 时长已下线，引用列吃掉空间） */
+  --table-grid: 44px minmax(220px, 1.6fr) 56px 88px minmax(180px, 1.2fr);
 }
 
 @media (prefers-reduced-motion: reduce) {

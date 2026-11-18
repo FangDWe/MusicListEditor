@@ -31,6 +31,8 @@ arboard = "3"
 # 结构化日志：控制台 + 文件滚动（需求文档 §5.5 可观测性）
 tauri-plugin-log = "2"
 log = { version = "0.4", features = ["kv"] }
+# 音频标签读写：标题 / 艺术家 / 专辑 / 封面（需求文档 F6）
+lofty = "0.22"
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

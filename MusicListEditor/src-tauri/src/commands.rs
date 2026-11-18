@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::config;
@@ -565,6 +565,98 @@ pub async fn track_properties(
         store.track_props(&track_id)
     })
     .await
+}
+
+/// 删除歌曲文件（进回收站）+ 从全部播放列表移除 + 记录文件名（F4.6）
+#[tauri::command]
+pub async fn tracks_delete(
+    app: AppHandle,
+    state: State<'_, AppContext>,
+    track_ids: Vec<String>,
+) -> AppResult<DeleteResult> {
+    with_store(app, state, move |store, _cfg, _cancel, app_handle| {
+        let (names, failed, affected) = store.delete_tracks(&track_ids)?;
+        let record_path = record_deleted(app_handle, &names);
+        Ok(DeleteResult {
+            report: DeleteReport {
+                deleted: names.len(),
+                failed,
+                affected_playlists: affected,
+                record_path,
+            },
+            state: store.state(),
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn track_tags_get(
+    app: AppHandle,
+    state: State<'_, AppContext>,
+    track_id: String,
+) -> AppResult<TrackTags> {
+    with_store(app, state, move |store, _cfg, _cancel, _app| {
+        store.track_tags(&track_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn track_tags_save(
+    app: AppHandle,
+    state: State<'_, AppContext>,
+    track_id: String,
+    patch: TagPatch,
+) -> AppResult<TrackTagsResult> {
+    with_store(app, state, move |store, _cfg, _cancel, _app| {
+        let tags = store.save_track_tags(&track_id, &patch)?;
+        Ok(TrackTagsResult {
+            tags,
+            state: store.state(),
+        })
+    })
+    .await
+}
+
+/// 读取本地图片并返回 data URL（封面预览 / 截取用，避免开放 fs 插件）
+#[tauri::command]
+pub fn image_data_url(path: String) -> AppResult<String> {
+    crate::tags::image_data_url(Path::new(&path))
+}
+
+/// 把删除的歌曲文件名逐行追加到应用数据目录（与日志同级），永久保留、允许重复
+fn record_deleted(app: &AppHandle, names: &[String]) -> String {
+    if names.is_empty() {
+        return String::new();
+    }
+    let Ok(dir) = app.path().app_local_data_dir() else {
+        log::warn!("无法定位应用数据目录，删除记录未写入");
+        return String::new();
+    };
+    if let Err(error) = std::fs::create_dir_all(&dir) {
+        log::warn!("创建应用数据目录失败：{error}");
+    }
+    let path = dir.join("deleted-songs.txt");
+    let mut text = String::new();
+    for name in names {
+        text.push_str(name);
+        text.push_str("\r\n");
+    }
+    use std::io::Write as _;
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        Ok(mut file) => {
+            if let Err(error) = file.write_all(text.as_bytes()).and_then(|_| file.flush()) {
+                log::error!("写入删除记录失败：{error}");
+            }
+        }
+        Err(error) => log::error!("打开删除记录失败：{error}"),
+    }
+    crate::model::display_path(&path)
 }
 
 #[tauri::command]

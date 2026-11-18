@@ -16,12 +16,13 @@ npm run tauri build   # 产物：src-tauri/target/release/bundle（NSIS / MSI）
 
 ```
 src-tauri/src/
-├─ lib.rs        日志插件（tauri-plugin-log）、dialog 插件、状态托管、27 个命令注册
+├─ lib.rs        日志插件（tauri-plugin-log）、dialog 插件、状态托管、30 个命令注册
 ├─ main.rs       入口
 ├─ commands.rs   全部 IPC 命令 + AppContext（与文档 §4.5 命令表一一对应）
-├─ store.rs      工作区状态机：索引、未归类、编辑、撤销、写回、冲突检测
+├─ store.rs      工作区状态机：索引、未归类、编辑、撤销、写回、冲突检测、删除歌曲
 ├─ m3u.rs        解析 / 解码（UTF-8 → GB18030 → lossy）/ 标准格式序列化
 ├─ scanner.rs    递归扫描（含屏蔽目录）+ 并发解析播放列表
+├─ tags.rs       音频标签读写（lofty）：标题 / 艺术家 / 专辑 / 封面
 ├─ watcher.rs    .m3u 变更监听（notify，400ms 去抖）
 ├─ config.rs     配置持久化（app_data_dir/config.json）
 ├─ model.rs      领域模型、路径规范化 / 展示路径 / 标准格式路径
@@ -50,17 +51,20 @@ shared/types.ts  前后端共享 DTO 定义
 | F2.8 目录屏蔽 | 侧栏分组右键屏蔽（含子目录），配置持久化，设置中恢复，立即重扫 |
 | F3 多选加入 | `entries_add_to_playlists`：多选曲目 × 多选列表、已包含/半选、原子提交、撤销；面板与侧栏同套目录分组 |
 | F4 编辑与写回 | 移除、新建/重命名/删除（回收站）、**标准格式写回**（`#EXTM3U` + 绝对路径 `/` 分隔）、统一 UTF-8 with BOM、非 UTF-8 源强制备份、临时文件 + 原子替换、E3001 冲突检测 |
-| 视觉/动效 | 蓝白 token、motion 过渡、`prefers-reduced-motion` 降级、主题蓝滚动条、无边框窗口 |
+| F4.6 删除歌曲文件 | 右键删除：文件入回收站 + 从全部播放列表移除条目 + 文件名追加到 `%LOCALAPPDATA%\com.fdw.music-list-editor\deleted-songs.txt` |
+| F6 歌曲信息编辑 | `tags.rs`（lofty 0.22）：读写标题 / 艺术家 / 专辑 / 封面，直接写回音频文件；封面单按钮「替换封面」（只换第一张）+ 正方形截取开关（canvas 裁剪后写回） |
+| 视觉/动效 | 蓝白 token、motion 过渡、`prefers-reduced-motion` 降级、主题蓝滚动条、无边框窗口、无边框歌曲列表 + 引用圆角标签 |
 | 可观测性 | `tauri-plugin-log`：控制台 + `%LOCALAPPDATA%\com.fdw.music-list-editor\logs`，2MB × 5 滚动；前端异常经 `log_write` 汇入 |
 
 ## 本地约定
 
 - 写回一律 **UTF-8（默认带 BOM）**，内容为标准格式，旧 `#EXTINF`/注释/指令不会保留（文档 F4.3 / Q10）。
 - 界面路径统一去掉 `\\?\` 前缀（`model::display_path`）。
-- 删除走系统回收站，不做不可恢复删除。
+- 删除走系统回收站，不做不可恢复删除；删除的歌曲名永久记账（允许重复）。
+- 扫描阶段**不读**音频标签（保速度），标签编辑只改文件本身（F6.4）。
 
 ## 待完成（P1/P2）
 
 - 拖拽排序（命令 `entries_reorder` 已实现，UI 未接）
-- ID3/FLAC 标签读取（当前标题取路径文件名）
+- 扫描期读取标签（P2，让列表标题默认取标签而不是文件名）
 - 安装包签名、自动更新、深色主题

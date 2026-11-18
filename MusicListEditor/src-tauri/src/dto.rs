@@ -166,6 +166,64 @@ pub struct TrackProps {
     pub exists: bool,
 }
 
+/// 歌曲标签（F6）：标题 / 艺术家 / 专辑 / 封面预览
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackTags {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    /// `data:<mime>;base64,...`，无封面时为 None
+    pub cover_data_url: Option<String>,
+    pub ext: String,
+    pub editable: bool,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TagPatch {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    /// 用磁盘上的图片替换第一张封面（未截取时）
+    pub cover_path: Option<String>,
+    /// 前端截取后的图片（`data:<mime>;base64,...`），优先于 coverPath
+    pub cover_data_url: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackTagsResult {
+    pub tags: TrackTags,
+    pub state: AppState,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteFailure {
+    pub track_id: String,
+    pub name: String,
+    pub reason: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteReport {
+    pub deleted: usize,
+    pub failed: Vec<DeleteFailure>,
+    /// 因此被置为「未保存」的播放列表数量
+    pub affected_playlists: usize,
+    /// 删除记录文件路径（文件名逐行追加）
+    pub record_path: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteResult {
+    pub report: DeleteReport,
+    pub state: AppState,
+}
+
 /// 被屏蔽的目录（F2.8）：`root` 为工作区根的小写展示路径，`rel` 为相对该根的目录
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]

@@ -921,6 +921,130 @@ impl WorkspaceStore {
             .ok_or_else(|| AppError::new("E4001", "找不到该曲目"))
     }
 
+    // ------------------------------------------------------- 删除歌曲（F4.6）
+
+    /// 物理删除歌曲文件（进回收站），并从全部播放列表移除其条目（F4.6）。
+    /// 返回：（被删除的文件名，失败项，受影响的播放列表数量）
+    pub fn delete_tracks(
+        &mut self,
+        track_ids: &[String],
+    ) -> AppResult<(Vec<String>, Vec<DeleteFailure>, usize)> {
+        if self.root.is_none() {
+            return Err(AppError::new("E1001", "请先打开工作区"));
+        }
+        let mut ids: Vec<String> = Vec::new();
+        for id in track_ids {
+            if !id.is_empty() && !ids.contains(id) {
+                ids.push(id.clone());
+            }
+        }
+        if ids.is_empty() {
+            return Err(AppError::new("E4003", "没有可删除的曲目"));
+        }
+
+        let mut deleted_names: Vec<String> = Vec::new();
+        let mut failed: Vec<DeleteFailure> = Vec::new();
+        let mut removed: HashSet<TrackId> = HashSet::new();
+
+        for id in &ids {
+            let path = self
+                .tracks
+                .get(id)
+                .map(|track| track.path.clone())
+                .or_else(|| self.path_by_id.get(id).cloned());
+            let Some(path) = path else {
+                failed.push(DeleteFailure {
+                    track_id: id.clone(),
+                    name: id.clone(),
+                    reason: "找不到该曲目".to_string(),
+                });
+                continue;
+            };
+            let name = path
+                .file_name()
+                .map(|value| value.to_string_lossy().to_string())
+                .unwrap_or_else(|| display_path(&path));
+            if !path.is_file() {
+                failed.push(DeleteFailure {
+                    track_id: id.clone(),
+                    name,
+                    reason: "文件不存在".to_string(),
+                });
+                continue;
+            }
+            match trash::delete(&path) {
+                Ok(()) => {
+                    log::info!("删除歌曲文件：{}", display_path(&path));
+                    deleted_names.push(name);
+                    removed.insert(id.clone());
+                }
+                Err(error) => failed.push(DeleteFailure {
+                    track_id: id.clone(),
+                    name,
+                    reason: format!("移入回收站失败：{error}"),
+                }),
+            }
+        }
+
+        if removed.is_empty() {
+            return Ok((deleted_names, failed, 0));
+        }
+
+        // 从所有播放列表移除对应条目，并置为未保存（由用户决定何时写回）
+        let mut snapshots: Vec<Snapshot> = Vec::new();
+        let mut affected = 0usize;
+        for index in 0..self.playlists.len() {
+            let hit = self.playlists[index]
+                .entries
+                .iter()
+                .any(|entry| entry.track_id.as_ref().is_some_and(|id| removed.contains(id)));
+            if !hit {
+                continue;
+            }
+            snapshots.push(Snapshot {
+                playlist_id: self.playlists[index].id,
+                entries: self.playlists[index].entries.clone(),
+                dirty: self.playlists[index].dirty,
+            });
+            self.playlists[index]
+                .entries
+                .retain(|entry| !entry.track_id.as_ref().is_some_and(|id| removed.contains(id)));
+            self.playlists[index].dirty = true;
+            affected += 1;
+        }
+        if !snapshots.is_empty() {
+            self.push_undo(UndoOp { snapshots });
+        }
+
+        for id in &removed {
+            self.tracks.remove(id);
+            self.path_by_id.remove(id);
+        }
+        self.rebuild_references();
+        self.rebuild_paths();
+
+        Ok((deleted_names, failed, affected))
+    }
+
+    // ------------------------------------------------------- 标签编辑（F6）
+
+    pub fn track_tags(&self, track_id: &str) -> AppResult<TrackTags> {
+        let path = self.track_path(track_id)?;
+        crate::tags::read(&path)
+    }
+
+    pub fn save_track_tags(&mut self, track_id: &str, patch: &TagPatch) -> AppResult<TrackTags> {
+        let path = self.track_path(track_id)?;
+        let info = crate::tags::write(&path, patch)?;
+        // 列表标题跟随新标签，避免「改了看不到」
+        if let Some(title) = info.title.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+            if let Some(track) = self.tracks.get_mut(track_id) {
+                track.title = title.to_string();
+            }
+        }
+        Ok(info)
+    }
+
     pub fn undo(&mut self) -> AppResult<AppState> {
         let op = self
             .undo

@@ -6,6 +6,7 @@ mod m3u;
 mod model;
 mod scanner;
 mod store;
+mod tags;
 mod watcher;
 
 use tauri::Manager;
@@ -65,6 +66,10 @@ pub fn run() {
             commands::track_open_external,
             commands::track_reveal,
             commands::track_properties,
+            commands::tracks_delete,
+            commands::track_tags_get,
+            commands::track_tags_save,
+            commands::image_data_url,
             commands::clipboard_write,
             commands::cancel_scan,
             commands::scan_stats,

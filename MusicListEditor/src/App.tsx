@@ -15,6 +15,7 @@ import type {
   Inclusion,
   Row,
   ScanProgress,
+  TagPatch,
   ViewKind,
 } from '../shared/types';
 import { ApiError, api, logEvent, onFsChanged, onScanProgress, type ScanStats } from './lib/api';
@@ -565,6 +566,59 @@ export function App() {
     [handleError],
   );
 
+  /** 打开歌曲信息编辑（F6） */
+  const openTagEditor = useCallback(
+    async (row: Row): Promise<void> => {
+      if (!row.trackId) return;
+      try {
+        const info = await api.trackTags(row.trackId);
+        setDialog({ kind: 'tags', trackId: row.trackId, info });
+      } catch (error) {
+        handleError(error);
+      }
+    },
+    [handleError],
+  );
+
+  const saveTags = useCallback(
+    async (trackId: string, patch: TagPatch): Promise<void> => {
+      setBusy(true);
+      try {
+        const res = await api.saveTrackTags(trackId, patch);
+        applyState(res.state);
+        setDialog(null);
+        showToast('已写入歌曲信息');
+      } catch (error) {
+        handleError(error);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [applyState, showToast, handleError],
+  );
+
+  /** 删除歌曲文件并从所有列表移除（F4.6） */
+  const deleteTracks = useCallback(
+    async (trackIds: string[]): Promise<void> => {
+      setBusy(true);
+      try {
+        const res = await api.deleteTracks(trackIds);
+        applyState(res.state);
+        setDialog(null);
+        setSelected(new Set());
+        const { report } = res;
+        let text = `已删除 ${report.deleted} 个文件，并从 ${report.affectedPlaylists} 个播放列表移除条目`;
+        if (report.failed.length > 0) text += `，${report.failed.length} 个失败`;
+        showToast(text, { kind: report.failed.length > 0 ? 'error' : 'info', duration: 6000 });
+      } catch (error) {
+        handleError(error);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [applyState, showToast, handleError],
+  );
+
   const changeConfig = useCallback(
     async (patch: Partial<AppConfig>): Promise<void> => {
       try {
@@ -718,6 +772,28 @@ export function App() {
         onClick: () => void removeSelected(),
       },
       {
+        key: 'tags',
+        label: '编辑歌曲信息…',
+        disabled: !hasTrack,
+        onClick: () => void openTagEditor(row),
+      },
+      {
+        key: 'delete',
+        label: '删除歌曲文件…',
+        danger: true,
+        disabled: !hasTrack,
+        onClick: () => {
+          const targets = (selectedRows.length > 0 ? selectedRows : [row]).filter((item) => item.trackId);
+          setDialog({
+            kind: 'confirm-delete-tracks',
+            trackIds: [
+              ...new Set(targets.map((item) => item.trackId).filter((id): id is string => Boolean(id))),
+            ],
+            names: targets.map((item) => item.title),
+          });
+        },
+      },
+      {
         key: 'reveal',
         label: '在资源管理器中显示',
         disabled: !hasTrack,
@@ -741,7 +817,17 @@ export function App() {
         onClick: () => void showProperties(row),
       },
     ];
-  }, [menu, app, hasWorkspace, selectedRows.length, handleError, openAddPanel, removeSelected, showProperties]);
+  }, [
+    menu,
+    app,
+    hasWorkspace,
+    selectedRows,
+    handleError,
+    openAddPanel,
+    removeSelected,
+    showProperties,
+    openTagEditor,
+  ]);
 
   return (
     <div className="app">
@@ -863,6 +949,8 @@ export function App() {
             onCreatePlaylist={(name) => void createPlaylist(name)}
             onRenamePlaylist={(id, name) => void renamePlaylist(id, name)}
             onDeletePlaylist={(id) => void deletePlaylist(id)}
+            onDeleteTracks={(trackIds) => void deleteTracks(trackIds)}
+            onSaveTags={(trackId, patch) => void saveTags(trackId, patch)}
             onOverwrite={() => void saveCurrent(true)}
             onReload={(id) => {
               void (async () => {
@@ -877,6 +965,7 @@ export function App() {
             }}
             onConfigChange={(patch) => void changeConfig(patch)}
             onUnblockDir={(dir) => void blockDir(dir, false)}
+            onError={handleError}
           />
         )}
       </AnimatePresence>
