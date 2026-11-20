@@ -580,6 +580,52 @@ impl WorkspaceStore {
         Ok(self.state())
     }
 
+    /// 从多个播放列表移除给定曲目：用于「加入播放列表」面板取消勾选已包含的列表
+    /// 多个列表共用一条撤销记录，撤销可整体还原
+    pub fn remove_tracks_from_playlists(
+        &mut self,
+        playlist_ids: &[u64],
+        track_ids: &[String],
+    ) -> AppResult<AppState> {
+        let ids: HashSet<TrackId> = track_ids.iter().cloned().collect();
+        if ids.is_empty() || playlist_ids.is_empty() {
+            return Ok(self.state());
+        }
+        let mut snapshots: Vec<Snapshot> = Vec::new();
+        for playlist_id in playlist_ids {
+            let index = match self.require_index(*playlist_id) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            let before = self.playlists[index].entries.len();
+            let kept: Vec<Entry> = self.playlists[index]
+                .entries
+                .iter()
+                .filter(|entry| match (&entry.kind, &entry.track_id) {
+                    (EntryKind::Track, Some(id)) => !ids.contains(id),
+                    _ => true,
+                })
+                .cloned()
+                .collect();
+            if kept.len() == before {
+                continue;
+            }
+            snapshots.push(Snapshot {
+                playlist_id: *playlist_id,
+                entries: self.playlists[index].entries.clone(),
+                dirty: self.playlists[index].dirty,
+            });
+            self.playlists[index].entries = kept;
+            self.playlists[index].dirty = true;
+        }
+        if snapshots.is_empty() {
+            return Ok(self.state());
+        }
+        self.push_undo(UndoOp { snapshots });
+        self.rebuild_references();
+        Ok(self.state())
+    }
+
     pub fn reorder(&mut self, playlist_id: u64, from: usize, to: usize) -> AppResult<AppState> {
         let index = self.require_index(playlist_id)?;
         let length = self.playlists[index].entries.len();

@@ -821,6 +821,11 @@ body.resizing .sidebar {
   color: var(--color-text-3);
 }
 
+/* 取消勾选「已全部包含」的列表：提示提交后会移出 */
+.pl-row .meta.removing {
+  color: var(--color-warning);
+}
+
 .checkbox {
   width: 16px;
   height: 16px;

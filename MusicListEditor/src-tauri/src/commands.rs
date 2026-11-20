@@ -391,6 +391,19 @@ pub async fn entries_remove(
 }
 
 #[tauri::command]
+pub async fn playlist_remove_tracks(
+    app: AppHandle,
+    state: State<'_, AppContext>,
+    playlist_ids: Vec<u64>,
+    track_ids: Vec<String>,
+) -> AppResult<AppState> {
+    with_store(app, state, move |store, _cfg, _cancel, _app| {
+        store.remove_tracks_from_playlists(&playlist_ids, &track_ids)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn entries_reorder(
     app: AppHandle,
     state: State<'_, AppContext>,

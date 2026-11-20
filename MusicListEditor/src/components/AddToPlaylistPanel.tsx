@@ -15,12 +15,14 @@ interface AddToPlaylistPanelProps {
   loading: boolean;
   busy: boolean;
   onClose: () => void;
-  onSubmit: (playlistIds: number[], allowDup: boolean) => void;
+  onSubmit: (playlistIds: number[], removeIds: number[], allowDup: boolean) => void;
   onCreate: (name: string) => Promise<number | null>;
 }
 
 export function AddToPlaylistPanel(props: AddToPlaylistPanelProps) {
   const [checked, setChecked] = useState<Set<number>>(new Set());
+  /** 已全部包含、但被用户取消勾选的播放列表：提交时把所选曲目从这些列表移除 */
+  const [deselected, setDeselected] = useState<Set<number>>(new Set());
   const [allowDup, setAllowDup] = useState(false);
   const [filter, setFilter] = useState('');
   const [newName, setNewName] = useState('');
@@ -38,7 +40,28 @@ export function AddToPlaylistPanel(props: AddToPlaylistPanelProps) {
   // 与侧栏一致的目录分组（F3.3）
   const groups = useMemo(() => groupByDir(visible), [visible]);
 
-  const toggle = (id: number): void => {
+  const addCount = checked.size;
+  const removeCount = deselected.size;
+  const submitLabel =
+    addCount > 0 && removeCount > 0
+      ? `应用（+${addCount} / −${removeCount}）`
+      : addCount > 0
+        ? `加入（${addCount}）`
+        : removeCount > 0
+          ? `移出（${removeCount}）`
+          : '加入';
+
+  const toggle = (id: number, fully: boolean): void => {
+    // 已全部包含的列表默认处于勾选态，点一下表示「移出」；再点一下恢复
+    if (fully && !checked.has(id)) {
+      setDeselected((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+      return;
+    }
     setChecked((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -83,7 +106,7 @@ export function AddToPlaylistPanel(props: AddToPlaylistPanelProps) {
         <div className="panel-head">
           <div className="panel-title">加入播放列表</div>
           <div className="panel-hint">
-            已选 {props.trackCount} 首曲目，可同时加入多个播放列表
+            已选 {props.trackCount} 首曲目，可同时加入或移出多个播放列表；取消勾选「已全部包含」的列表即从该列表移除
             {props.loading ? ' · 正在读取包含情况…' : ''}
           </div>
         </div>
@@ -128,26 +151,25 @@ export function AddToPlaylistPanel(props: AddToPlaylistPanelProps) {
                   items.map((pl) => {
                     const info = inclusionMap.get(pl.id);
                     const fully = Boolean(info && info.total > 0 && info.included === info.total);
+                    const removed = fully && deselected.has(pl.id);
+                    const selected = checked.has(pl.id) || (fully && !removed);
                     const partial = Boolean(info && info.included > 0 && !fully);
-                    const disabled = fully && !allowDup;
                     return (
                       <div
                         key={pl.id}
                         className={`pl-row${dir !== '' ? ' nested' : ''}`}
-                        onClick={() => {
-                          if (!disabled) toggle(pl.id);
-                        }}
+                        onClick={() => toggle(pl.id, fully)}
                         title={pl.relPath}
                       >
                         <span
-                          className={`checkbox${
-                            fully || checked.has(pl.id) ? ' checked' : partial ? ' partial' : ''
-                          }${disabled ? ' disabled' : ''}`}
+                          className={`checkbox${selected ? ' checked' : partial ? ' partial' : ''}`}
                         />
                         <span className="name">{pl.name}</span>
-                        <span className="meta">
+                        <span className={`meta${removed ? ' removing' : ''}`}>
                           {fully
-                            ? '已全部包含'
+                            ? removed
+                              ? '提交后移出所选曲目'
+                              : '已全部包含'
                             : partial && info
                               ? `已含 ${info.included}/${info.total}`
                               : `${pl.entryCount} 条`}
@@ -189,10 +211,10 @@ export function AddToPlaylistPanel(props: AddToPlaylistPanelProps) {
           </button>
           <button
             className="btn primary"
-            disabled={checked.size === 0 || props.busy}
-            onClick={() => props.onSubmit([...checked], allowDup)}
+            disabled={addCount + removeCount === 0 || props.busy}
+            onClick={() => props.onSubmit([...checked], [...deselected], allowDup)}
           >
-            加入{checked.size > 0 ? `（${checked.size}）` : ''}
+            {submitLabel}
           </button>
         </div>
       </motion.div>

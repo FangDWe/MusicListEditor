@@ -69,6 +69,8 @@ export const api = {
     }),
   removeEntries: (playlistId: number, entryIndexes: number[]) =>
     call<AppState>('entries_remove', { playlistId, entryIndexes }),
+  removeTracksFromPlaylist: (playlistIds: number[], trackIds: string[]) =>
+    call<AppState>('playlist_remove_tracks', { playlistIds, trackIds }),
   reorderEntry: (playlistId: number, from: number, to: number) =>
     call<AppState>('entries_reorder', { playlistId, from, to }),
 

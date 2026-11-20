@@ -55,6 +55,7 @@ pub fn run() {
             commands::view_select,
             commands::entries_add_to_playlists,
             commands::entries_remove,
+            commands::playlist_remove_tracks,
             commands::entries_reorder,
             commands::playlist_create,
             commands::playlist_rename,

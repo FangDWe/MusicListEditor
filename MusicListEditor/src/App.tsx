@@ -385,18 +385,30 @@ export function App() {
   );
 
   const submitAdd = useCallback(
-    async (playlistIds: number[], allowDup: boolean): Promise<void> => {
+    async (playlistIds: number[], removeIds: number[], allowDup: boolean): Promise<void> => {
       if (!addPanel) return;
       setBusy(true);
       try {
-        const res = await api.addToPlaylists(addPanel.trackIds, playlistIds, allowDup);
-        applyState(res.state);
-        const names = res.report.targetNames.map((name) => `「${name}」`).join('');
-        let text = `已加入 ${res.report.added} 首到${names}`;
-        if (res.report.skipped > 0) text += `，跳过 ${res.report.skipped} 条（已包含）`;
-        if (res.report.failed.length > 0) text += `，${res.report.failed.length} 项失败`;
+        let next: AppState | null = null;
+        if (removeIds.length > 0) {
+          next = await api.removeTracksFromPlaylist(removeIds, addPanel.trackIds);
+        }
+        const parts: string[] = [];
+        if (removeIds.length > 0) {
+          parts.push(`从 ${removeIds.length} 个播放列表移出 ${addPanel.trackIds.length} 首`);
+        }
+        if (playlistIds.length > 0) {
+          const res = await api.addToPlaylists(addPanel.trackIds, playlistIds, allowDup);
+          next = res.state;
+          const names = res.report.targetNames.map((name) => `「${name}」`).join('');
+          let text = `已加入 ${res.report.added} 首到${names}`;
+          if (res.report.skipped > 0) text += `，跳过 ${res.report.skipped} 条（已包含）`;
+          if (res.report.failed.length > 0) text += `，${res.report.failed.length} 项失败`;
+          parts.push(text);
+        }
+        if (next) applyState(next);
         setAddPanel(null);
-        showToast(text, { action: { label: '撤销', run: () => void undo() } });
+        showToast(parts.join('；'), { action: { label: '撤销', run: () => void undo() } });
       } catch (error) {
         handleError(error);
       } finally {
@@ -928,7 +940,7 @@ export function App() {
             loading={inclusionLoading}
             busy={busy}
             onClose={() => setAddPanel(null)}
-            onSubmit={(ids, allowDup) => void submitAdd(ids, allowDup)}
+            onSubmit={(ids, removeIds, allowDup) => void submitAdd(ids, removeIds, allowDup)}
             onCreate={createPlaylistFromPanel}
           />
         )}
